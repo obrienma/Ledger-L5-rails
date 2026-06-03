@@ -189,3 +189,90 @@ The original build plan mentioned `--skip-action-mailer` as part of the `rails n
 
 > Q: Why not just add `throttled` to `tenant_balances`?
 > A: `tenant_balances` is write-heavy — updated atomically on every `AggregateUsageJob`. `entitlements` is read-heavy — polled by three pipeline services on every request. Separating them means entitlement reads never contend with balance update row locks. It also makes the enforcement contract explicit: `entitlements` is the canonical throttle state; `tenant_balances` is the running counter.
+
+---
+
+## Phase 3 — DB Create + Migrations
+
+**Date:** 2026-06-03
+**Scope:** `db:create`, generate and run 7 migrations (tenants, api_keys, usage_events, tenant_balances, entitlements, invoices, operators); all UUID PKs.
+
+---
+
+### Patterns
+
+**Pattern: `id: :uuid, default: -> { "gen_random_uuid()" }` on `create_table`**
+
+> Q: How do you declare a UUID primary key in a Rails migration?
+> A: Pass `id: :uuid, default: -> { "gen_random_uuid()" }` to `create_table`. The lambda wraps the Postgres function call so Rails emits it as SQL rather than evaluating it in Ruby. `gen_random_uuid()` is a Postgres built-in (pgcrypto extension, available by default in Postgres 13+). Without the `default:` option, Rails would not auto-populate the PK — every INSERT would need an explicit UUID.
+
+**Pattern: `type: :uuid` on `t.references` when the parent table uses UUID PKs**
+
+> Q: If `tenants.id` is a UUID, what changes about the `t.references :tenant` line?
+> A: You must add `type: :uuid`. Without it, `t.references :tenant` creates a `tenant_id bigint` column, which can't hold a foreign key to a UUID PK. Rails won't infer the FK type from the parent table — you have to be explicit.
+
+**Pattern: Partial unique index on `stripe_invoice_id`**
+
+> Q: `stripe_invoice_id` is nullable — can you still enforce uniqueness?
+> A: Yes, with a partial index: `add_index :invoices, :stripe_invoice_id, unique: true, where: "stripe_invoice_id IS NOT NULL"`. A standard unique index would treat two `NULL` rows as duplicates (Postgres treats NULLs as not equal in unique indexes, but it's cleaner to be explicit). The `where:` clause only indexes non-null rows.
+
+---
+
+### Anti-Patterns
+
+**Anti-Pattern: Adding `t.uuid :id` as a column when `id: :uuid` is the correct approach**
+
+> Q: The generator emitted `t.uuid :id` inside the `create_table` block — isn't that right?
+> A: No. `t.uuid :id` adds a column named `id` of type UUID but doesn't make it the primary key. The correct approach is `create_table :name, id: :uuid, default: -> { "gen_random_uuid()" }` — this tells Rails that the PK itself is a UUID column. Passing `id: :uuid` at the table level also suppresses the default bigserial PK that Rails would otherwise create.
+
+---
+
+### Challenges
+
+**Challenge: `sudo` unavailable for `createuser` — postgres role must be created by user**
+
+Rails' `db:create` requires a PostgreSQL role matching the OS user (`amanda`). This role didn't exist. Creating it requires `sudo -u postgres createuser --superuser amanda`, which needs an interactive terminal for the sudo password. The non-interactive tool shell blocked this. Workaround: user ran it manually via `! sudo -u postgres createuser --superuser amanda`.
+
+This is the same recurring WSL2 constraint from Phase 0: anything requiring `sudo` must be delegated to the user.
+
+**Challenge: Neon provides a pooled URL by default — wrong for Rails**
+
+The Neon dashboard's "Connection string" button copies the PgBouncer pooled URL (hostname contains `-pooler`). Using it with Rails causes silent failures: Solid Queue's advisory locks are dropped mid-transaction, and prepared statements can misfire. The fix is to remove `-pooler` from the hostname to get the direct connection. Neon labels this the "Direct" connection in the connection details panel, but it's easy to miss.
+
+**Challenge: rbenv Ruby not on PATH in the tool shell**
+
+Running `bin/rails db:create` failed with "ruby not found" because the tool shell doesn't load `.bash_profile` / `.zprofile` where rbenv's init is configured. Fix: explicitly export the rbenv paths at the top of every shell command — `export PATH="$HOME/.rbenv/bin:$HOME/.rbenv/shims:$PATH" && eval "$(rbenv init -)"`. This is required for every `rails`/`bundle exec` command in this environment.
+
+---
+
+### Decisions
+
+**Decision: `precision: 12, scale: 4` on `quantity` and `current_usage` decimal columns**
+
+> Q: Why not just `t.decimal :quantity`?
+> A: Unqualified `decimal` in Postgres maps to arbitrary-precision `NUMERIC`, which is correct but imposes no storage hint. Explicit `precision: 12, scale: 4` gives Postgres a fixed-point column (up to 99,999,999.9999 with four decimal places). This is sufficient for metering quantities (API calls, tokens, GB) and avoids floating-point precision loss. Billing math on floats is an anti-pattern.
+
+**Decision: Neon over Railway-native Postgres**
+
+> Q: Railway offers a built-in Postgres add-on — why use Neon instead?
+> A: Neon is serverless and branch-aware: each git branch can get its own database branch (useful for preview deploys). It also has a generous free tier and the same DATABASE_URL convention, so the Rails config is identical. For a portfolio project the operational difference is negligible; Neon's branching story is the differentiator. Same direct connection string is used across all environments (dev, test, prod) — `DATABASE_URL` in `.env` locally, env var on Railway.
+
+**Decision: Direct connection string, not the pooled (PgBouncer) URL**
+
+> Q: Neon offers a pooled connection via PgBouncer — why use the direct one?
+> A: Solid Queue uses `pg_try_advisory_lock` for job processing. PgBouncer in transaction mode does not support advisory locks (the lock is released when the transaction ends, defeating the purpose). Rails also uses prepared statements by default, which PgBouncer transaction mode can silently break. The direct connection string (no `-pooler` in the hostname) avoids both issues. For a portfolio-scale app the connection count on Neon's free tier is fine without pooling.
+
+**Decision: Single Neon database for all environments (dev/test/prod)**
+
+> Q: Shouldn't dev, test, and prod use separate databases?
+> A: For a portfolio project with no real users, the risk of a shared database is negligible. Neon branching could provide isolation cheaply, but one database simplifies the setup — one `DATABASE_URL`, no branch management, no separate seed/teardown. RSpec's transactional fixtures still roll back between tests. Revisit if the project acquires real data that must be protected.
+
+**Decision: `null: false, default: 0` on `tenant_balances.current_usage`**
+
+> Q: Why default to 0 rather than allowing NULL for "no events yet"?
+> A: NULL in a counter column forces every read to guard against nil before doing arithmetic. A zero default makes the balance immediately usable: `tenant.balance.current_usage + event.quantity` never raises a nil error. NULL is semantically wrong here — zero usage is a valid, meaningful state, not "unknown".
+
+**Decision: `index: { unique: true }` on `tenant_id` for `tenant_balances` and `entitlements`**
+
+> Q: Why a unique index on the foreign key, not just a regular index?
+> A: Both tables enforce a one-row-per-tenant invariant — one balance row, one entitlement row. A unique index makes the database enforce this, not just application code. Without it, a race condition in `AggregateUsageJob` (two jobs for the same tenant starting simultaneously) could INSERT two balance rows, breaking the atomic UPDATE pattern entirely.
