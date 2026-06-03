@@ -67,9 +67,10 @@ Browser ←── WebSocket (Solid Cable / Turbo Streams) ──→ Web
 - [x] Phase 0 — Ruby 3.3.6 via rbenv, Rails 8.1.3 installed
 - [x] Phase 1 — Rails scaffold initialized; renamed to TallyWire; gems added (Devise, Stripe, RSpec, FactoryBot)
 - [x] Phase 2 — DB created on Neon; 7 migrations run (tenants, api_keys, usage_events, tenant_balances, entitlements, invoices, operators); UUID PKs on all tables; unique index on `usage_events.idempotency_key`; `dotenv-rails` added; all environments (dev/test/prod) use `DATABASE_URL`
+- [x] Phase 3 — `Tenant` + `ApiKey` models; `ApiKeyAuthenticatable` concern; bcrypt `{id}.{secret}` token scheme; 15 model specs green
 
 ### What's still ahead
-- [ ] Phase 3 — `ApiKeyAuthenticatable` concern + Devise `Operator` model
+- [ ] Phase 4 — `POST /api/v1/usage` ingestion endpoint (idempotent)
 - [ ] Phase 4 — `POST /api/v1/usage` ingestion endpoint (idempotent)
 - [ ] Phase 5 — `AggregateUsageJob` (atomic `UPDATE tenant_balances`)
 - [ ] Phase 6 — `GET /api/v1/entitlements/:id`

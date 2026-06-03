@@ -276,3 +276,65 @@ Running `bin/rails db:create` failed with "ruby not found" because the tool shel
 
 > Q: Why a unique index on the foreign key, not just a regular index?
 > A: Both tables enforce a one-row-per-tenant invariant — one balance row, one entitlement row. A unique index makes the database enforce this, not just application code. Without it, a race condition in `AggregateUsageJob` (two jobs for the same tenant starting simultaneously) could INSERT two balance rows, breaking the atomic UPDATE pattern entirely.
+
+---
+
+## Phase 4 — `ApiKeyAuthenticatable` + `Tenant` / `ApiKey` Models
+
+**Date:** 2026-06-03
+**Scope:** `Tenant` and `ApiKey` ActiveRecord models; bcrypt-based API key token scheme; `ApiKeyAuthenticatable` controller concern; model specs.
+
+---
+
+### Patterns
+
+**Pattern: `{id}.{secret}` token format for bcrypt API keys**
+
+> Q: BCrypt is one-way — how do you look up an ApiKey by token without a full table scan?
+> A: The token is structured as `{uuid}.{secret}`. The UUID is the record's primary key (assigned in Ruby before save via `self.id = SecureRandom.uuid`). On authentication, the token is split on `.`: the first part is used to find the record by PK (O(1) indexed lookup), then BCrypt verifies the secret part against the stored digest. No table scan, no extra lookup column needed.
+
+**Pattern: `generate_token` assigns `self.id` before Postgres does**
+
+> Q: Postgres generates UUIDs via `gen_random_uuid()` — how can Ruby assign the id before the INSERT?
+> A: Rails allows setting `self.id` in Ruby before save. When the record is inserted, ActiveRecord uses the Ruby-assigned UUID as the PK value, and Postgres's `DEFAULT gen_random_uuid()` is bypassed. This is necessary so the UUID is known in memory before the record exists in the database (needed to build the `{id}.{secret}` token).
+
+**Pattern: `delete_prefix("Bearer ")` for header parsing**
+
+> Q: How should the `Authorization` header be parsed?
+> A: `request.headers["Authorization"].to_s.delete_prefix("Bearer ").strip` — `to_s` handles nil (returns `""` rather than raising), `delete_prefix` removes the scheme without risk of stripping too much (unlike `split(" ", 2).last`), and `strip` handles any extra whitespace. Safe to call on any header value including absent ones.
+
+---
+
+### Anti-Patterns
+
+**Anti-Pattern: Using `has_secure_token` for API keys**
+
+> Q: Rails has `has_secure_token` — why not use it?
+> A: `has_secure_token` generates a token and stores it **in plaintext** (the column holds the actual token). This means anyone who reads the database sees valid tokens. The project requires BCrypt digests — only the hash is stored, never the token itself. `has_secure_token` is for tokens where plaintext storage is acceptable (e.g., password reset links that expire quickly). Long-lived API keys warrant the extra protection.
+
+**Anti-Pattern: `.dependent(:destroy)` matcher without `shoulda-matchers`**
+
+> Q: Why did `it { is_expected.to have_many(:api_keys).dependent(:destroy) }` fail?
+> A: Without the `shoulda-matchers` gem, `have_many` resolves to Ruby's built-in `respond_to?(:many?)` — not an RSpec matcher chain. The `.dependent(:destroy)` call then hits the wrong object and raises `NoMethodError`. Fix: either add `shoulda-matchers` or use plain `respond_to` expectations. Chose the latter to avoid adding a gem for one test idiom.
+
+---
+
+### Challenges
+
+**Challenge: FactoryBot not wired into RSpec by default**
+
+`rspec-rails` and `factory_bot_rails` are installed but the `FactoryBot::Syntax::Methods` include must be added to `RSpec.configure` manually in `spec/rails_helper.rb`. Without it, `create(...)` and `build(...)` are undefined in specs. Adding `config.include FactoryBot::Syntax::Methods` to the config block fixes it.
+
+---
+
+### Decisions
+
+**Decision: `generate_token` is a manual call, not a `before_create` callback**
+
+> Q: Why not call `generate_token` automatically in a `before_create` hook?
+> A: The plaintext token must be returned to the caller once and only once. A `before_create` callback has no way to surface a return value — there's nowhere to put it that the caller can access without an instance variable hack. Making it a manual call (`raw = api_key.generate_token; api_key.save!`) keeps the contract explicit: the caller is responsible for capturing the token and presenting it to the user.
+
+**Decision: BCrypt for API key digests, not HMAC-SHA256**
+
+> Q: SHA-256 HMAC is faster and allows lookup-by-hash — why BCrypt?
+> A: BCrypt's cost factor makes brute-forcing a leaked digest database expensive even for short secrets. The project spec calls for BCrypt explicitly, and the `{id}.{secret}` token format sidesteps BCrypt's main drawback (no indexed lookup) by using the UUID PK for the lookup. The cost in authentication latency (~10ms) is acceptable for an API that doesn't need sub-millisecond auth.
