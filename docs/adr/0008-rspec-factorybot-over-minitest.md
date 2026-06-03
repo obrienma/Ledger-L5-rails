@@ -9,7 +9,7 @@
 
 Rails ships with Minitest as the default test framework. RSpec is the dominant alternative in the Rails ecosystem, particularly for applications with complex domain logic.
 
-TallyWire has specific testing requirements that inform this decision:
+Ledger-L5 has specific testing requirements that inform this decision:
 
 1. **Idempotency testing** — `POST /api/v1/usage` must handle concurrent duplicate `idempotency_key` submissions without double-counting. Testing this requires spawning multiple threads and asserting on race conditions at the DB layer.
 2. **Tenant plan variants** — Tests need to set up tenants in various plan/status combinations (free, throttled, overaged). Factory inheritance makes this significantly less verbose.

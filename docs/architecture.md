@@ -1,8 +1,8 @@
-# TallyWire — Architecture
+# Ledger-L5 — Architecture
 
 ## System Overview
 
-TallyWire is the commercial layer of the EventHorizon → Synapse-L4 → Sentinel-L7 portfolio. Pipeline services report usage events to TallyWire; TallyWire aggregates, meters, and bills. Entitlement state flows back to pipeline services via a poll endpoint (unidirectional coupling — see ADR 0005).
+Ledger-L5 is the commercial layer of the EventHorizon → Synapse-L4 → Sentinel-L7 portfolio. Pipeline services report usage events to Ledger-L5; Ledger-L5 aggregates, meters, and bills. Entitlement state flows back to pipeline services via a poll endpoint (unidirectional coupling — see ADR 0005).
 
 ```mermaid
 graph TD
@@ -12,13 +12,13 @@ graph TD
         SL[Sentinel-L7]
     end
 
-    subgraph TallyWire - Web Process
+    subgraph Ledger-L5 - Web Process
         API_USAGE[POST /api/v1/usage]
         API_ENT[GET /api/v1/entitlements/:id]
         DASH[Operator Dashboard\nHotwire + Turbo Streams]
     end
 
-    subgraph TallyWire - Worker Process
+    subgraph Ledger-L5 - Worker Process
         AGG[AggregateUsageJob]
         ENFORCE[EnforceLimitsJob\nnightly]
         STRIPE_SYNC[SyncStripeMetersJob\nnightly]
@@ -26,7 +26,7 @@ graph TD
     end
 
     subgraph PostgreSQL
-        DB[(tally_wire DB\napp tables\nSolid Queue\nSolid Cable)]
+        DB[(ledger_l5 DB\napp tables\nSolid Queue\nSolid Cable)]
     end
 
     subgraph Stripe
@@ -61,7 +61,7 @@ graph TD
 ```mermaid
 sequenceDiagram
     participant C as Pipeline Service
-    participant W as TallyWire Web (Puma)
+    participant W as Ledger-L5 Web (Puma)
     participant DB as PostgreSQL
     participant J as Worker Process
     participant S as Stripe
@@ -94,7 +94,7 @@ sequenceDiagram
 sequenceDiagram
     participant P as Pipeline Service
     participant Cache as In-Process TTL Cache
-    participant W as TallyWire Web
+    participant W as Ledger-L5 Web
     participant DB as PostgreSQL
 
     P->>Cache: check entitlements[tenant_id]
@@ -110,7 +110,7 @@ sequenceDiagram
     P->>P: enforce locally allow or gate
 ```
 
-**Fail-open:** if TallyWire is unreachable, pipeline uses stale cached value until TTL expires, then fails open (allows traffic). Documented in ADR 0005.
+**Fail-open:** if Ledger-L5 is unreachable, pipeline uses stale cached value until TTL expires, then fails open (allows traffic). Documented in ADR 0005.
 
 ---
 

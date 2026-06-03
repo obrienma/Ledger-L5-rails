@@ -7,7 +7,7 @@
 
 ## Context
 
-Rails defaults to `bigint` auto-incrementing primary keys. For most tables this is fine. TallyWire has specific reasons to use UUIDs on domain tables.
+Rails defaults to `bigint` auto-incrementing primary keys. For most tables this is fine. Ledger-L5 has specific reasons to use UUIDs on domain tables.
 
 ---
 

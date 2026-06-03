@@ -1,6 +1,6 @@
-# WireTrace Learning Log
+# Ledger-L5 Learning Log
 
-A running record of patterns learned, anti-patterns avoided, challenges encountered, and design decisions made while building WireTrace with Ruby on Rails 8.
+A running record of patterns learned, anti-patterns avoided, challenges encountered, and design decisions made while building Ledger-L5 with Ruby on Rails 8.
 
 ---
 
@@ -26,7 +26,7 @@ A running record of patterns learned, anti-patterns avoided, challenges encounte
 **Pattern: `rbenv global` vs `rbenv local`**
 
 > Q: When do you use `rbenv global` vs `rbenv local`?
-> A: `rbenv global` sets the fallback Ruby for the entire user account (writes to `~/.rbenv/version`). `rbenv local` writes a `.ruby-version` file in the current directory — this overrides global for that project. Convention: set global to your primary version; use local for projects that pin a different version. WireTrace will get a `.ruby-version` file when the Rails app is initialized.
+> A: `rbenv global` sets the fallback Ruby for the entire user account (writes to `~/.rbenv/version`). `rbenv local` writes a `.ruby-version` file in the current directory — this overrides global for that project. Convention: set global to your primary version; use local for projects that pin a different version. Ledger-L5 will get a `.ruby-version` file when the Rails app is initialized.
 
 ---
 
@@ -66,7 +66,7 @@ This is a recurring WSL2 constraint: anything needing sudo must be run by the us
 ## Phase 1 — Rails App Initialization (`rails new`)
 
 **Date:** 2026-06-03
-**Scope:** `rails new . --css=tailwind --database=postgresql` in the WireTrace directory
+**Scope:** `rails new . --css=tailwind --database=postgresql` in the Ledger-L5 directory
 
 ---
 
@@ -74,8 +74,8 @@ This is a recurring WSL2 constraint: anything needing sudo must be run by the us
 
 **Pattern: `rails new .` (dot) initializes into the current directory**
 
-> Q: What's the difference between `rails new wire_trace` and `rails new .`?
-> A: `rails new wire_trace` creates a new subdirectory named `wire_trace/`. `rails new .` scaffolds into the current directory — useful when the directory already exists (e.g., already created on GitHub and cloned). Rails derives the app name from the directory name. In this case the directory is `WireTrace`, so the app module is named `WireTrace`.
+> Q: What's the difference between `rails new ledger_l5` and `rails new .`?
+> A: `rails new ledger_l5` creates a new subdirectory named `ledger_l5/`. `rails new .` scaffolds into the current directory — useful when the directory already exists (e.g., already created on GitHub and cloned). Rails derives the app name from the directory name. In this case the directory is `Ledger-L5`, so the app module is named `Ledger-L5`.
 
 **Pattern: `--css=tailwind` wires up Tailwind via the standalone CSS binary**
 
@@ -98,8 +98,8 @@ This is a recurring WSL2 constraint: anything needing sudo must be run by the us
 
 **Anti-Pattern: `rails new --api` when the app has a browser dashboard**
 
-> Q: Should you use `--api` because WireTrace has an API endpoint?
-> A: No. `--api` strips the middleware and view layer needed for Hotwire (sessions, cookies, flash, ERB rendering). WireTrace is hybrid: an API ingestion endpoint AND a browser dashboard. `--api` is only for pure JSON backends consumed by a separate frontend.
+> Q: Should you use `--api` because Ledger-L5 has an API endpoint?
+> A: No. `--api` strips the middleware and view layer needed for Hotwire (sessions, cookies, flash, ERB rendering). Ledger-L5 is hybrid: an API ingestion endpoint AND a browser dashboard. `--api` is only for pure JSON backends consumed by a separate frontend.
 
 ---
 
@@ -125,10 +125,10 @@ Rails 8 includes Kamal (Docker-based VPS deployment tool) in the default `Gemfil
 
 ---
 
-## Phase 2 — Project Pivot: WireTrace → TallyWire
+## Phase 2 — Project Pivot: Ledger-L5 → Ledger-L5
 
 **Date:** 2026-06-03
-**Scope:** Rename app from WireTrace (telemetry) to TallyWire (metering & invoicing). Add Devise, Stripe, RSpec, FactoryBot.
+**Scope:** Rename app from Ledger-L5 (telemetry) to Ledger-L5 (metering & invoicing). Add Devise, Stripe, RSpec, FactoryBot.
 
 ---
 
@@ -172,13 +172,13 @@ The original build plan mentioned `--skip-action-mailer` as part of the `rails n
 
 **Decision: Pivot the scaffold rather than start fresh**
 
-> Q: Should we delete the WireTrace repo and run `rails new tally_wire` from scratch?
+> Q: Should we delete the Ledger-L5 repo and run `rails new ledger_l5` from scratch?
 > A: No. At Phase 1, the only app-name-specific content is in five files (see Pattern above). Starting fresh would re-run `bundle install`, re-download the Solid Stack, and lose the committed Phase 0/1 learning log entries. Renaming in-place took ~10 minutes and preserved the full git history and doc structure.
 
 **Decision: Devise `Operator` model, not `User`**
 
 > Q: Why name the Devise model `Operator` instead of `User`?
-> A: TallyWire has two distinct actor types: `Operator` (internal billing team, Devise-authenticated, manages dashboard) and `Tenant` (external customer, identified by API key, never logs in). Naming the Devise model `User` would create ambiguity — "is this user a tenant or an operator?" — in every conversation and every query. `Operator` is unambiguous.
+> A: Ledger-L5 has two distinct actor types: `Operator` (internal billing team, Devise-authenticated, manages dashboard) and `Tenant` (external customer, identified by API key, never logs in). Naming the Devise model `User` would create ambiguity — "is this user a tenant or an operator?" — in every conversation and every query. `Operator` is unambiguous.
 
 **Decision: UUID PKs across all domain tables**
 

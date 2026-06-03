@@ -7,7 +7,7 @@
 
 ## Context
 
-WireTrace requires two concurrent runtime processes:
+Ledger-L5 requires two concurrent runtime processes:
 
 1. **Web process** — Puma HTTP server serving the dashboard and API ingestion endpoint
 2. **Worker process** — Solid Queue job runner (`bundle exec jobs:start`) processing `ProcessLogEntryJob` asynchronously

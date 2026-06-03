@@ -7,7 +7,7 @@
 
 ## Context
 
-TallyWire needs authentication for the **operator dashboard** — the internal UI used by billing team members to manage tenants, review invoices, suspend accounts, and configure plans.
+Ledger-L5 needs authentication for the **operator dashboard** — the internal UI used by billing team members to manage tenants, review invoices, suspend accounts, and configure plans.
 
 Rails 8 ships a native authentication generator (`bin/rails generate authentication`) that creates a minimal `User` + `Session` model, a sessions controller, and a basic password reset flow. No gem required.
 

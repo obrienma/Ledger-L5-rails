@@ -1,8 +1,8 @@
-# TallyWire
+# Ledger-L5
 
 Consumption-based metering and invoicing engine. The commercial layer for the EventHorizon → Synapse-L4 → Sentinel-L7 portfolio. Rails 8, Solid Queue, Stripe Billing Meters, Hotwire.
 
-Pipeline services report usage events; TallyWire aggregates, meters, enforces plan limits, and invoices via Stripe. Operator dashboard streams live usage updates over WebSockets with zero React.
+Pipeline services report usage events; Ledger-L5 aggregates, meters, enforces plan limits, and invoices via Stripe. Operator dashboard streams live usage updates over WebSockets with zero React.
 
 ---
 
@@ -65,12 +65,11 @@ Browser ←── WebSocket (Solid Cable / Turbo Streams) ──→ Web
 ## Status
 
 - [x] Phase 0 — Ruby 3.3.6 via rbenv, Rails 8.1.3 installed
-- [x] Phase 1 — Rails scaffold initialized; renamed to TallyWire; gems added (Devise, Stripe, RSpec, FactoryBot)
+- [x] Phase 1 — Rails scaffold initialized; renamed to Ledger-L5; gems added (Devise, Stripe, RSpec, FactoryBot)
 - [x] Phase 2 — DB created on Neon; 7 migrations run (tenants, api_keys, usage_events, tenant_balances, entitlements, invoices, operators); UUID PKs on all tables; unique index on `usage_events.idempotency_key`; `dotenv-rails` added; all environments (dev/test/prod) use `DATABASE_URL`
 - [x] Phase 3 — `Tenant` + `ApiKey` models; `ApiKeyAuthenticatable` concern; bcrypt `{id}.{secret}` token scheme; 15 model specs green
 
 ### What's still ahead
-- [ ] Phase 4 — `POST /api/v1/usage` ingestion endpoint (idempotent)
 - [ ] Phase 4 — `POST /api/v1/usage` ingestion endpoint (idempotent)
 - [ ] Phase 5 — `AggregateUsageJob` (atomic `UPDATE tenant_balances`)
 - [ ] Phase 6 — `GET /api/v1/entitlements/:id`
