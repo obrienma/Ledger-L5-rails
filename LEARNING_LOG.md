@@ -338,3 +338,69 @@ Running `bin/rails db:create` failed with "ruby not found" because the tool shel
 
 > Q: SHA-256 HMAC is faster and allows lookup-by-hash — why BCrypt?
 > A: BCrypt's cost factor makes brute-forcing a leaked digest database expensive even for short secrets. The project spec calls for BCrypt explicitly, and the `{id}.{secret}` token format sidesteps BCrypt's main drawback (no indexed lookup) by using the UUID PK for the lookup. The cost in authentication latency (~10ms) is acceptable for an API that doesn't need sub-millisecond auth.
+
+---
+
+## Phase 5 — `POST /api/v1/usage` Ingestion Endpoint
+
+**Date:** 2026-06-03
+**Scope:** `UsageEvent` model; `Api::V1::BaseController`; `Api::V1::UsageController`; route `POST /api/v1/usage`; `usage_events` factory; 8 request specs.
+
+---
+
+### Patterns
+
+**Pattern: Separate `Api::V1::BaseController < ActionController::API` for the API namespace**
+
+> Q: Why not include `ApiKeyAuthenticatable` in `ApplicationController` and skip it for non-API routes?
+> A: `ApplicationController` inherits from `ActionController::Base` — it has sessions, CSRF protection, view rendering, and cookie handling. API endpoints don't need any of that and including auth there would bleed API behaviour into operator dashboard routes. Subclassing `ActionController::API` gives a clean, lightweight stack for the API namespace with no CSRF and no view overhead. `ApiKeyAuthenticatable` is included once in `BaseController`; all API controllers inherit it automatically.
+
+**Pattern: `rescue ActiveRecord::RecordNotUnique` for idempotency — not `validate :uniqueness`**
+
+> Q: The `usage_events` table has a unique index on `idempotency_key`. Why not also add `validates :uniqueness_of :idempotency_key` in the model?
+> A: `validates :uniqueness` works by querying the database before insert — it's a two-step check-then-write, not atomic. Under concurrent load, two requests with the same key can both pass the validation check and then race to insert, with one raising `RecordNotUnique` anyway. The unique index in Postgres is the real enforcement. Rescuing `ActiveRecord::RecordNotUnique` at the controller level handles the duplicate case atomically and correctly whether or not there's a validation — no double-check needed.
+
+**Pattern: Status 202 (Accepted) instead of 201 (Created) for async ingestion**
+
+> Q: RESTful convention for a successful POST is 201 Created — why 202?
+> A: 202 Accepted signals "the request was received and will be processed, but processing is not complete." Usage events are ingested synchronously here, but `AggregateUsageJob` (Phase 5) will process them asynchronously. Using 202 from day one sets the correct contract with callers: the event is stored but aggregation happens later. 201 would imply the resource is immediately queryable in its final state.
+
+---
+
+### Anti-Patterns
+
+**Anti-Pattern: `validate :uniqueness, scope: :tenant_id` on `idempotency_key`**
+
+> Q: Should idempotency keys be unique per-tenant rather than globally?
+> A: Per-tenant uniqueness seems reasonable ("each tenant manages their own key space"), but it complicates the contract for callers — a key that's valid for Tenant A might collide on Tenant B if they happened to generate the same UUID. Global uniqueness is simpler to reason about, and UUID-based keys (the recommended format) have negligible collision probability across all tenants. The unique index covers the whole column, not a partial scope.
+
+---
+
+### Challenges
+
+**Challenge: Rack deprecation warning for `:unprocessable_entity` in RSpec matchers**
+
+`have_http_status(:unprocessable_entity)` triggers a Rack warning: "Status code :unprocessable_entity is deprecated and will be removed in a future version of Rack. Please use :unprocessable_content instead." The rspec-rails matcher resolves status symbols via Rack::Utils — and Rack now prefers `:unprocessable_content` (the HTTP 1.1 name used in RFC 7231). Fix: use the numeric status `422` directly in the matcher, which bypasses the symbol resolution entirely and is version-agnostic. Same fix applied in the controller for consistency.
+
+**Challenge: rbenv Ruby not on PATH in the tool shell (recurring)**
+
+Identical to Phase 3's challenge — `bundle exec rspec` fails with "command not found" unless `PATH` is explicitly prefixed with `$HOME/.rbenv/shims:$HOME/.rbenv/bin`. This is a WSL2 tool-shell constraint: `.zprofile` / `.bash_profile` are not sourced. Must be repeated on every session.
+
+---
+
+### Decisions
+
+**Decision: `params.require(:usage_event).permit(...)` — namespace params under `usage_event` key**
+
+> Q: Why not accept flat params (`params[:event_type]`, `params[:quantity]`, etc.)?
+> A: Rails Strong Parameters with `require(:usage_event)` mirrors ActiveRecord's conventional `create(usage_event_params)` pattern and signals to callers that the request body should be a JSON object with a `usage_event` wrapper. It also makes the controller consistent with any future form-based routes in the operator dashboard that might POST `usage_event` data. Flat params are fine for tiny APIs but the wrapper is worth the minor caller overhead.
+
+**Decision: `metadata: {}` as `permit(metadata: {})` — open permit for JSONB**
+
+> Q: How do you permit an arbitrary JSONB hash in Strong Parameters?
+> A: `permit(metadata: {})` allows any key-value pairs within the `metadata` hash. This is Rails' idiom for open-ended hashes — it's not type-safe but it matches the JSONB column semantics where callers define their own structure. The alternative (enumerating every allowed metadata key) would couple the ingestion API to each caller's domain, which defeats the purpose of a flexible metadata field.
+
+**Decision: `POST /api/v1/usage` (singular resource path) not `/api/v1/usage_events`**
+
+> Q: Rails REST convention would use `usage_events` for the resource name — why `usage`?
+> A: From the caller's perspective, the action is "report usage", not "create a usage event record". The path communicates intent; the internal model name is an implementation detail. `POST /api/v1/usage` reads naturally in documentation and in `curl` commands. It also leaves room for `GET /api/v1/usage` (a usage summary endpoint) in a later phase without introducing a separate resource namespace.

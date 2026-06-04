@@ -68,9 +68,9 @@ Browser ←── WebSocket (Solid Cable / Turbo Streams) ──→ Web
 - [x] Phase 1 — Rails scaffold initialized; renamed to Ledger-L5; gems added (Devise, Stripe, RSpec, FactoryBot)
 - [x] Phase 2 — DB created on Neon; 7 migrations run (tenants, api_keys, usage_events, tenant_balances, entitlements, invoices, operators); UUID PKs on all tables; unique index on `usage_events.idempotency_key`; `dotenv-rails` added; all environments (dev/test/prod) use `DATABASE_URL`
 - [x] Phase 3 — `Tenant` + `ApiKey` models; `ApiKeyAuthenticatable` concern; bcrypt `{id}.{secret}` token scheme; 15 model specs green
+- [x] Phase 4 — `POST /api/v1/usage` ingestion endpoint; `UsageEvent` model; `Api::V1::UsageController` (Bearer auth, idempotent on `idempotency_key`, 202/409/401/422); 8 request specs green
 
 ### What's still ahead
-- [ ] Phase 4 — `POST /api/v1/usage` ingestion endpoint (idempotent)
 - [ ] Phase 5 — `AggregateUsageJob` (atomic `UPDATE tenant_balances`)
 - [ ] Phase 6 — `GET /api/v1/entitlements/:id`
 - [ ] Phase 7 — Operator dashboard (Turbo Streams live usage updates)
