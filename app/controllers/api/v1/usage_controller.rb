@@ -5,6 +5,7 @@ module Api
         event = current_tenant.usage_events.build(usage_event_params)
 
         if event.save
+          AggregateUsageJob.perform_later(current_tenant.id.to_s)
           render json: { id: event.id }, status: :accepted
         else
           render json: { errors: event.errors.full_messages }, status: 422
