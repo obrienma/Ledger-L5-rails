@@ -404,3 +404,62 @@ Identical to Phase 3's challenge — `bundle exec rspec` fails with "command not
 
 > Q: Rails REST convention would use `usage_events` for the resource name — why `usage`?
 > A: From the caller's perspective, the action is "report usage", not "create a usage event record". The path communicates intent; the internal model name is an implementation detail. `POST /api/v1/usage` reads naturally in documentation and in `curl` commands. It also leaves room for `GET /api/v1/usage` (a usage summary endpoint) in a later phase without introducing a separate resource namespace.
+
+---
+
+## Phase 6 — `GET /api/v1/entitlements/:id`
+
+**Date:** 2026-06-05
+**Scope:** `Entitlement` model; `Api::V1::EntitlementsController#show`; tenant-scoped 404 guard; composite response (entitlement + plan + balance); 7 request specs.
+
+---
+
+### Patterns
+
+**Pattern: Tenant-scoped 404 guard — deny cross-tenant access without revealing existence**
+
+> Q: The entitlement ID is a UUID in the URL — can't a caller just enumerate other tenants' entitlement IDs?
+> A: The controller fetches `current_tenant.entitlement` (association-scoped), then compares that record's ID to the URL param. If the tenant has no entitlement, or if the ID doesn't match, the response is 404 — identical in both cases. This is the *object-level authorization* pattern: never return 403 ("you can't see that") for a resource that belongs to someone else — that leaks existence. A 404 is the correct response, indistinguishable from "no such record."
+
+**Pattern: Composite read response — denormalize at the API boundary**
+
+> Q: The entitlement record doesn't store `plan` or `current_usage` — should we add separate endpoints for those?
+> A: No. Pipeline services poll this endpoint to make a throttle decision; they need throttle state, plan tier, and current consumption in one call to avoid multiple round trips. Assembling the response from `entitlement`, `current_tenant.plan`, and `current_tenant.tenant_balance` at the controller level is a deliberate denormalization at the API boundary. The separate tables are still correctly normalized — only the *response* is composite.
+
+---
+
+### Anti-Patterns
+
+**Anti-Pattern: Returning 403 for a cross-tenant entitlement request**
+
+> Q: Should the API return 403 Forbidden when the authenticated tenant tries to access another tenant's entitlement?
+> A: No. A 403 tells the caller "this resource exists, but you can't have it." That's information leakage — it confirms the UUID maps to a real record. The correct response is 404, which is indistinguishable from "no record with this ID exists." This is standard practice for multi-tenant APIs and is enforced in the spec's authorization section.
+
+---
+
+### Challenges
+
+**Challenge: Decimal column serialized as String in JSON response**
+
+`TenantBalance#current_usage` is a `decimal(12, 4)` column. When Rails serializes it into a JSON response hash, ActiveRecord returns the value as a Ruby `BigDecimal` object. `render json:` calls `.to_s` on `BigDecimal`, producing `"42.0"` (a string) rather than `42.0` (a number). The spec assertion `eq(42.0)` failed because `"42.0" != 42.0`.
+
+Fix: call `.to_f` on the value before including it in the response hash. `BigDecimal#to_f` returns a Ruby Float, which `render json:` serializes as a JSON number. Alternative: use `as_json` or a serializer — but `.to_f` is sufficient at this precision (4 decimal places fit within Float's 15-16 significant digit precision).
+
+---
+
+### Decisions
+
+**Decision: Fetch entitlement via association (`current_tenant.entitlement`), not `Entitlement.find(params[:id])`**
+
+> Q: Why not just `Entitlement.find(params[:id])` and let it raise `RecordNotFound`?
+> A: `Entitlement.find(params[:id])` returns any entitlement in the table, regardless of which tenant owns it. A tenant with a valid API key could read any other tenant's entitlement by guessing or brute-forcing UUIDs. Fetching via `current_tenant.entitlement` scopes the lookup to the authenticated tenant's record — the URL ID is then used only to verify the caller is addressing the right resource, not as the lookup key.
+
+**Decision: `current_usage` defaults to `0` when no `TenantBalance` row exists**
+
+> Q: A new tenant has no `tenant_balance` row — should the response omit `current_usage` or return `null`?
+> A: Return `0`. The API contract is "how much usage has this tenant consumed this period." Zero is the correct answer for a tenant who has reported no events. Returning `null` would force every caller to guard against a missing field. The `.to_f` call on `nil` (when `tenant_balance` is absent) conveniently returns `0.0`, making the nil-safe default free.
+
+**Decision: Include `plan` in the entitlement response**
+
+> Q: `plan` is on the `tenants` table, not `entitlements` — should pipeline services fetch it separately?
+> A: No. Pipeline services need `plan` to interpret the entitlement (e.g., the `free` plan has a 10k/month limit, `pro` has 1M). Putting `plan` in the response eliminates a second API call and avoids a distributed state sync problem: if a separate `/api/v1/tenant` endpoint existed, callers would need to combine two responses under a lock to avoid acting on a stale plan+throttle combination. One response is atomic.
