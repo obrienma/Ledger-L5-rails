@@ -538,3 +538,27 @@ The controller, views, and job broadcast were written and the README/Learning Lo
 
 > Q: The job spec could `expect(Turbo::StreamsChannel).to receive(:broadcast_replace_to)` instead of using `have_broadcasted_to` — why not mock it?
 > A: A mock only proves the method was *called*, not that the right partial rendered with the right locals — it would pass even if `_tenant_row.html.erb` were broken or `current_usage` were stale. `have_broadcasted_to("dashboard")` (rspec-rails' ActionCable matcher, backed by the `test` adapter already configured in `config/cable.yml`) captures the actual rendered `<turbo-stream>` HTML that went over the wire, so the assertion — "the broadcast contains `tenant_#{id}` and the fresh usage figure" — verifies real rendered output, consistent with how the rest of the suite avoids mocking at internal boundaries.
+
+---
+
+## Documentation Audit — `docs/architecture.md` Reconciliation
+
+**Date:** 2026-07-07
+**Scope:** Reconciled `docs/architecture.md`'s Mermaid diagrams against actual implementation (`db/schema.rb`, controllers, `AggregateUsageJob`). No application code changed.
+
+---
+
+### Challenges
+
+**Challenge: The architecture diagrams were written as an early plan and silently drifted from every phase since**
+
+`docs/architecture.md`'s ERD and sequence diagrams predate Phases 3–7 and were never updated as the real schema and behavior diverged from the plan. By the time of this audit, nearly every entity in the ERD had invented fields that don't exist (`API_KEY.key_digest` vs. real `token_digest`; `USAGE_EVENT.source`/`metric`/`recorded_at` vs. real `event_type`/`metadata`; `TENANT_BALANCE.usage_count`/`plan_limit` vs. real `current_usage`; `ENTITLEMENT.throttle_reason`/`plan_limit`/`overage_allowed` vs. real `throttled`/`throttled_at`; `INVOICE.line_items`/`total_cents` vs. real `amount_cents`; `OPERATOR.failed_attempts`/`locked_at` — fields from Devise's `:lockable`/`:trackable`, modules the model never actually includes). The Usage Ingestion and Entitlement Read Path sequence diagrams had the same problem: they described a `broadcast_prepend_to` call and `plan_limit`/`overage_allowed` response fields that were never built. This wasn't caught earlier because nothing in the test suite or the mandatory README/LEARNING_LOG update step touches `docs/architecture.md` — it isn't part of the phase-completion checklist, so it can silently rot indefinitely.
+
+---
+
+### Decisions
+
+**Decision: Corrected every diagram in one pass rather than only the Phase-7-relevant one**
+
+> Q: Only the Usage Ingestion diagram's broadcast line was actually caused by today's work — why fix the ERD and Entitlement Read Path diagrams too?
+> A: The user was asked directly and chose the full audit. Partial fixes leave the file in a state where some diagrams are trustworthy and others aren't, with no visible signal to a reader about which is which — worse than leaving it uniformly stale, since a reader has no way to know to distrust it. A schema-derived doc either matches `db/schema.rb` or it doesn't; there's no partial-credit state worth preserving.

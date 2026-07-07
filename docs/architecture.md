@@ -64,11 +64,11 @@ sequenceDiagram
     participant W as Ledger-L5 Web (Puma)
     participant DB as PostgreSQL
     participant J as Worker Process
-    participant S as Stripe
+    participant O as Operator Browser
 
-    C->>W: POST /api/v1/usage<br/>Authorization: Bearer api_key<br/>{ tenant_id, idempotency_key, metric, quantity, occurred_at }
+    C->>W: POST /api/v1/usage<br/>Authorization: Bearer api_key<br/>{ tenant_id, idempotency_key, event_type, quantity, occurred_at }
 
-    W->>W: authenticate_api_request!<br/>digest match on api_keys table
+    W->>W: ApiKeyAuthenticatable<br/>digest match on api_keys.token_digest
 
     alt idempotency_key already exists
         W->>DB: SELECT usage_events WHERE idempotency_key = ?
@@ -81,9 +81,9 @@ sequenceDiagram
     end
 
     DB-->>J: job available Solid Queue poll
-    J->>DB: UPDATE tenant_balances SET usage_count = usage_count + quantity
-    J->>DB: broadcast_prepend_to tenant channel Solid Cable
-    DB-->>W: Turbo Stream pushed to operator browser
+    J->>DB: UPDATE tenant_balances SET current_usage = (SELECT SUM(quantity) FROM usage_events WHERE tenant_id = ? AND occurred_at BETWEEN period_start AND period_end)<br/>atomic full-period recalculation, not an increment
+    J->>DB: reload Tenant WITH tenant_balance, entitlement<br/>avoids broadcasting a stale pre-update object
+    J->>O: broadcast_replace_to "dashboard"<br/>target=tenant_id via Turbo::StreamsChannel (Solid Cable pubsub)
 ```
 
 ---
@@ -99,12 +99,12 @@ sequenceDiagram
 
     P->>Cache: check entitlements[tenant_id]
     alt cache hit TTL not expired
-        Cache-->>P: throttled false plan_limit 10000
+        Cache-->>P: throttled false plan pro current_usage 420.5
     else cache miss or expired
-        P->>W: GET /api/v1/entitlements/:tenant_id
-        W->>DB: SELECT FROM entitlements WHERE tenant_id = ?
-        DB-->>W: entitlement row
-        W-->>P: throttled false plan_limit 10000 overage_allowed true
+        P->>W: GET /api/v1/entitlements/:id<br/>Authorization: Bearer api_key
+        W->>DB: SELECT entitlement, tenant_balance scoped to current_tenant
+        DB-->>W: entitlement + balance rows
+        W-->>P: id throttled throttled_at plan current_usage
         P->>Cache: store with TTL=30s
     end
     P->>P: enforce locally allow or gate
@@ -123,10 +123,8 @@ erDiagram
         string email
         string encrypted_password
         datetime remember_created_at
-        integer failed_attempts
-        datetime locked_at
-        datetime last_sign_in_at
-        string last_sign_in_ip
+        string reset_password_token
+        datetime reset_password_sent_at
     }
 
     TENANT {
@@ -140,39 +138,34 @@ erDiagram
     API_KEY {
         uuid id PK
         uuid tenant_id FK
-        string key_digest
-        string label
-        datetime last_used_at
+        string name
+        string token_digest
+        boolean active
     }
 
     USAGE_EVENT {
         uuid id PK
         uuid tenant_id FK
         string idempotency_key
-        string source
-        string metric
-        integer quantity
+        string event_type
+        decimal quantity
         datetime occurred_at
-        datetime recorded_at
-        jsonb raw_payload
+        jsonb metadata
     }
 
     TENANT_BALANCE {
         uuid id PK
         uuid tenant_id FK
-        date current_period_start
-        bigint usage_count
-        bigint plan_limit
-        bigint overage_count
+        decimal current_usage
+        date period_start
+        date period_end
     }
 
     ENTITLEMENT {
         uuid id PK
         uuid tenant_id FK
         boolean throttled
-        string throttle_reason
-        bigint plan_limit
-        boolean overage_allowed
+        datetime throttled_at
     }
 
     INVOICE {
@@ -181,9 +174,9 @@ erDiagram
         string stripe_invoice_id
         date period_start
         date period_end
-        jsonb line_items
-        integer total_cents
+        integer amount_cents
         string status
+        datetime paid_at
     }
 
     TENANT ||--o{ API_KEY : "has many"
@@ -211,4 +204,4 @@ graph LR
     PG -.->|Solid Cable tables| WEB
 ```
 
-Both services share one `DATABASE_URL`. No Redis. No Sidekiq. No Pusher.
+Both worker and web share one `DATABASE_URL`. No Redis. No Sidekiq. No Pusher.
