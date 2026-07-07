@@ -17,7 +17,7 @@ Pipeline Services (EventHorizon / Synapse-L4 / Sentinel-L7)
 ┌───────────────────────────────────────────────────────────┐
 │                     Railway                               │
 │                                                           │
-│  ┌─────────────────┐     ┌───────────────────────────┐   │
+│  ┌─────────────────┐     ┌────────────────────────────┐   │
 │  │  Web (Puma)     │     │  Worker (jobs:start)       │   │
 │  │                 │     │                            │   │
 │  │  Operator dash  │     │  AggregateUsageJob         │   │
@@ -71,9 +71,9 @@ Browser ←── WebSocket (Solid Cable / Turbo Streams) ──→ Web
 - [x] Phase 4 — `POST /api/v1/usage` ingestion endpoint; `UsageEvent` model; `Api::V1::UsageController` (Bearer auth, idempotent on `idempotency_key`, 202/409/401/422); 8 request specs green
 - [x] Phase 5 — `AggregateUsageJob`; `TenantBalance` model; full-recalculation atomic UPDATE via SQL subquery; enqueued by controller on each accepted event; 7 job specs green (31 total)
 - [x] Phase 6 — `GET /api/v1/entitlements/:id`; `Entitlement` model; tenant-scoped 404 guard; response includes `throttled`, `plan`, `current_usage`; 7 request specs green (38 total)
+- [x] Phase 7 — Operator dashboard (`DashboardController`, Devise-gated); Turbo Streams live usage table; `AggregateUsageJob` broadcasts `replace` on each balance update; Solid Cable WebSocket transport; 5 request specs + 2 job broadcast specs green (45 total)
 
 ### What's still ahead
-- [ ] Phase 7 — Operator dashboard (Turbo Streams live usage updates)
 - [ ] Phase 8 — `EnforceLimitsJob` (nightly), scheduled via Solid Queue recurring
 - [ ] Phase 9 — Stripe integration (`SyncStripeMetersJob`, `GenerateInvoiceJob`)
 - [ ] Phase 10 — Railway `Procfile` + deployment config

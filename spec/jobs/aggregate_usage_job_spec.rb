@@ -82,5 +82,26 @@ RSpec.describe AggregateUsageJob, type: :job do
         expect(balance.current_usage).to eq(0)
       end
     end
+
+    context "Turbo Stream broadcast" do
+      it "broadcasts a replace targeting the tenant's row on the dashboard stream" do
+        create(:usage_event, tenant: tenant, quantity: 3.0, occurred_at: Time.current)
+
+        expect { described_class.perform_now(tenant.id.to_s) }
+          .to have_broadcasted_to("dashboard").with { |html|
+            expect(html).to include("tenant_#{tenant.id}")
+            expect(html).to include('action="replace"')
+          }
+      end
+
+      it "broadcasts fresh current_usage, not a stale pre-update value" do
+        create(:usage_event, tenant: tenant, quantity: 7.0, occurred_at: Time.current)
+
+        expect { described_class.perform_now(tenant.id.to_s) }
+          .to have_broadcasted_to("dashboard").with { |html|
+            expect(html).to include("7")
+          }
+      end
+    end
   end
 end

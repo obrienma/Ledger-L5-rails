@@ -26,5 +26,13 @@ class AggregateUsageJob < ApplicationJob
         tenant_id, period_start, period_end + 1.day
       ]
     )
+
+    tenant = Tenant.includes(:tenant_balance, :entitlement).find(tenant_id)
+    Turbo::StreamsChannel.broadcast_replace_to(
+      "dashboard",
+      target: "tenant_#{tenant_id}",
+      partial: "dashboard/tenant_row",
+      locals: { tenant: tenant }
+    )
   end
 end

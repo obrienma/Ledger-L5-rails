@@ -463,3 +463,78 @@ Fix: call `.to_f` on the value before including it in the response hash. `BigDec
 
 > Q: `plan` is on the `tenants` table, not `entitlements` — should pipeline services fetch it separately?
 > A: No. Pipeline services need `plan` to interpret the entitlement (e.g., the `free` plan has a 10k/month limit, `pro` has 1M). Putting `plan` in the response eliminates a second API call and avoids a distributed state sync problem: if a separate `/api/v1/tenant` endpoint existed, callers would need to combine two responses under a lock to avoid acting on a stale plan+throttle combination. One response is atomic.
+
+---
+
+## Phase 7 — Operator Dashboard (Turbo Streams)
+
+**Date:** 2026-06-06
+**Scope:** `DashboardController#index`; Devise `authenticate_operator!` gate; `dashboard/index.html.erb` + `_tenant_row` partial; `turbo_stream_from "dashboard"` subscription; `AggregateUsageJob` broadcasts `replace` after each balance update; root route wired to dashboard.
+
+---
+
+### Patterns
+
+**Pattern: Server-push via Turbo Streams — Publish/Subscribe over WebSocket**
+
+> Q: Why not poll `GET /dashboard` on a JavaScript timer to refresh usage numbers?
+> A: Polling sends a request regardless of whether anything changed. Under load (many tenants, frequent events) polling amplifies pressure on the web process. Turbo Streams inverts the direction: the browser opens one persistent WebSocket connection and waits. The server publishes only when state actually changes — one `replace` message per `AggregateUsageJob` run per tenant. Zero wasted requests.
+
+**Pattern: Broadcast a `replace` targeting a `<tr id="tenant_*">`, not a Turbo Frame**
+
+> Q: The dashboard table uses `<tr id="tenant_#{tenant.id}">` — should it use `<turbo-frame>` instead?
+> A: No. Turbo Frames are for navigation-scoping (clicking a link inside a frame stays inside the frame). Turbo Streams are for server-initiated DOM mutations. Using a `<turbo-frame>` inside a `<tbody>` would also produce invalid HTML — `<turbo-frame>` is a block element that can't be a direct child of `<tbody>`. The correct approach: each `<tr>` has a stable DOM id; `broadcast_replace_to` swaps the `<tr>` in-place by matching that id.
+
+**Pattern: `turbo_stream_from` inside `<tbody>` — where to put the subscription tag**
+
+> Q: Where in the view does `<%= turbo_stream_from "dashboard" %>` go?
+> A: Anywhere in the rendered page — the tag emits a `<turbo-cable-stream-source>` custom element that registers the WebSocket subscription when it mounts. Placing it inside `<tbody>` is technically invalid HTML but harmless in practice (browsers move unknown elements). Placing it just before the `<% @tenants.each %>` loop keeps the subscription visually co-located with the live content it drives.
+
+---
+
+### Anti-Patterns
+
+**Anti-Pattern: Calling `update_all` and then reading back stale data**
+
+> Q: `update_all` bypasses ActiveRecord callbacks and doesn't update the in-memory object — can you broadcast the old record?
+> A: No. After `update_all`, any `TenantBalance` object loaded before the call still holds the old `current_usage`. The broadcast must reload from the database: `Tenant.includes(:tenant_balance, :entitlement).find(tenant_id)` after the `update_all` call fetches fresh data. Broadcasting a stale object would push the old usage value to the dashboard — defeating the purpose of the live update.
+
+---
+
+### Challenges
+
+**Challenge: No existing views directory — dashboard views required `mkdir -p`**
+
+Rails generators create `app/views/<controller>/` automatically, but since `DashboardController` was written by hand (not generated), the directory didn't exist. `Write` tool silently fails if the parent directory is missing. Fix: `mkdir -p app/views/dashboard` before writing the templates. This is a recurring gotcha when creating controllers manually instead of via `rails generate controller`.
+
+**Challenge: Phase was marked `[x]` in the README before specs existed**
+
+The controller, views, and job broadcast were written and the README/Learning Log entries were completed in the same pass — but no spec file was created, breaking the pattern set by Phases 4–6, each of which cites a passing spec count in its own "done" bullet. The gap was only caught on review, after the fact. Fix: specs for `DashboardController` (`spec/requests/dashboard_spec.rb`) and for the job's broadcast (`spec/jobs/aggregate_usage_job_spec.rb`) were added retroactively, and the README bullet was corrected to include the spec count. Going forward, "done" should mean specs are green, not just that the code exists.
+
+**Challenge: `Turbo::StreamsChannel.broadcast_replace_to` uses an *unsigned* stream name, unlike the subscription**
+
+`turbo_stream_from "dashboard"` (used for the browser's WebSocket subscription) signs the stream name via `Turbo.signed_stream_verifier` before handing it to the channel. It would be easy to assume the same signing applies on the publish side and that testing the broadcast requires replicating that signature. It doesn't: `Turbo::Streams::Broadcasts#broadcast_stream_to` publishes with the raw, unsigned `stream_name_from(streamables)` — for a plain string like `"dashboard"`, that's just `"dashboard"` itself. Signing only protects the client-facing subscription parameter from tampering; the server-side pubsub channel name is unsigned. This meant `have_broadcasted_to("dashboard")` (rspec-rails' ActionCable matcher) could target the literal string directly, no signature reconstruction needed.
+
+---
+
+### Decisions
+
+**Decision: Global `"dashboard"` stream name, not per-tenant**
+
+> Q: Should each browser tab subscribe to `"dashboard_#{tenant_id}"` streams, or one global `"dashboard"` stream?
+> A: One global stream. The operator dashboard shows *all* tenants — it needs to receive updates for any tenant, not just one. Per-tenant streams would require the browser to open N WebSocket subscriptions (one per row), or a server-side fan-out to determine which tabs care about which tenants. A single named stream with per-row `replace` targets is simpler and correct.
+
+**Decision: `authenticate_operator!` via Devise, not a custom before_action**
+
+> Q: Why use Devise's `authenticate_operator!` instead of a custom `before_action :require_login`?
+> A: `authenticate_operator!` is Devise's built-in guard — it checks the session, handles remember-me tokens, and redirects to the Devise sign-in path on failure. A custom implementation would need to replicate all of that. More importantly, it's consistent: any future dashboard controllers inherit `before_action :authenticate_operator!` from `DashboardController` without additional wiring.
+
+**Decision: Eager-load `tenant_balance` and `entitlement` in both the index query and the job broadcast**
+
+> Q: The index query uses `includes(:tenant_balance, :entitlement)` — does the broadcast need to do the same?
+> A: Yes, and for a different reason. The index query avoids N+1 across all tenants. The job broadcast avoids a lazy-load inside a background thread — loading associations on-demand from a job context works but is a hidden query that makes the broadcast timing harder to reason about. Eager-loading in both places makes the data access pattern explicit and symmetrical.
+
+**Decision: Assert on rendered HTML fragments in specs, not on stubbed/mocked broadcast calls**
+
+> Q: The job spec could `expect(Turbo::StreamsChannel).to receive(:broadcast_replace_to)` instead of using `have_broadcasted_to` — why not mock it?
+> A: A mock only proves the method was *called*, not that the right partial rendered with the right locals — it would pass even if `_tenant_row.html.erb` were broken or `current_usage` were stale. `have_broadcasted_to("dashboard")` (rspec-rails' ActionCable matcher, backed by the `test` adapter already configured in `config/cable.yml`) captures the actual rendered `<turbo-stream>` HTML that went over the wire, so the assertion — "the broadcast contains `tenant_#{id}` and the fresh usage figure" — verifies real rendered output, consistent with how the rest of the suite avoids mocking at internal boundaries.
