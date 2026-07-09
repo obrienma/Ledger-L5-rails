@@ -1,5 +1,7 @@
 # Ledger-L5
 
+> **⚠️ Abandoned.** This Rails implementation is being abandoned in favour of a Python/FastAPI rewrite. This repo will be renamed **`ledger-l5-rails`** and kept for reference only — do not build new features here.
+
 Consumption-based metering and invoicing engine. The commercial layer for the EventHorizon → Synapse-L4 → Sentinel-L7 portfolio. Rails 8, Solid Queue, Stripe Billing Meters, Hotwire.
 
 Pipeline services report usage events; Ledger-L5 aggregates, meters, enforces plan limits, and invoices via Stripe. Operator dashboard streams live usage updates over WebSockets with zero React.
