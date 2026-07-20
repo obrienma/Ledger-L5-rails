@@ -1,6 +1,6 @@
 # Ledger-L5
 
-> **⚠️ Abandoned.** This Rails implementation is being abandoned in favour of a Python/FastAPI rewrite. This repo will be renamed **`ledger-l5-rails`** and kept for reference only — do not build new features here.
+> **⚠️ Abandoned.** This Rails implementation is being abandoned in favour of a Python/FastAPI [rewrite](https://github.com/obrienma/Ledger-L5/blob/master/docs/adr/0001-build-ledger-l5-in-python-fastapi.md). This repo will be renamed **`ledger-l5-rails`** and kept for reference only — do not build new features here.
 
 Consumption-based metering and invoicing engine. The commercial layer for the EventHorizon → Synapse-L4 → Sentinel-L7 portfolio. Rails 8, Solid Queue, Stripe Billing Meters, Hotwire.
 
